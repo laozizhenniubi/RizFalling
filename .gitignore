@@ -1,0 +1,13 @@
+# Build outputs
+*.o
+*.obj
+*.dll
+*.exe
+*.pdb
+*.ilk
+native/m_*.o
+
+# Local data
+data/
+*.ini
+*.log
