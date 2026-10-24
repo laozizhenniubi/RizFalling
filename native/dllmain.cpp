@@ -64,7 +64,6 @@ extern "C" __declspec(dllexport) HRESULT WINAPI D3D11CreateDevice(
     UINT SDKVersion, ID3D11Device** ppDevice,
     D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext) {
     resolve_all();
-    ensure_hook();
     using Fn = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT,
                                 const D3D_FEATURE_LEVEL*, UINT, UINT,
                                 ID3D11Device**, D3D_FEATURE_LEVEL*,
@@ -83,7 +82,6 @@ extern "C" __declspec(dllexport) HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
     IDXGISwapChain** ppSwapChain, ID3D11Device** ppDevice,
     D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext) {
     resolve_all();
-    ensure_hook();
     using Fn = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT,
                                 const D3D_FEATURE_LEVEL*, UINT, UINT,
                                 const DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**,
@@ -149,7 +147,7 @@ extern "C" __declspec(dllexport) void WINAPI EnableExperimentalShaderFeatures() 
 }
 
 static DWORD WINAPI boot_thread(LPVOID) {
-    Sleep(1500);   // 等 LoadLibrary 的 loader lock 释放
+    Sleep(3000);   // 避开游戏自身的 D3D 初始化窗口（1.5s 会与游戏设备创建撞车导致驱动死锁）
     resolve_all();
     ensure_hook();
     return 0;
