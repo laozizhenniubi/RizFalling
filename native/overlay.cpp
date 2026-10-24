@@ -98,6 +98,7 @@ struct RfCfg {
     int auto_align = 0;
     int tap_skin = 0;     // 0 圆球 1 圆环 2 方块 3 菱形
     int hold_skin = 0;    // 0 实心条 1 描边条 2 管道
+    int random_on = 0;    // 随机排列（列打乱）
 };
 
 static RfCfg g_cfg;
@@ -137,6 +138,17 @@ static int g_key_list_n = 0;
 
 static bool g_calib = false;
 static std::vector<double> g_calib_diffs;
+static int g_perm[4] = {0, 1, 2, 3};   // 随机排列：源列 → 目标列
+static void reshuffle_perm() {
+    srand((unsigned)(GetTickCount64() & 0x7fffffff));
+    do {
+        for (int i = 3; i > 0; i--) {
+            int j = rand() % (i + 1);
+            int t = g_perm[i]; g_perm[i] = g_perm[j]; g_perm[j] = t;
+        }
+    } while (g_perm[0] == 0 && g_perm[1] == 1 && g_perm[2] == 2 &&
+             g_perm[3] == 3);   // 避免恒等
+}
 static char g_msg[200] = {0};
 static double g_msg_t = 0.0;
 
@@ -260,6 +272,8 @@ static void cfg_load() {
     if (g_cfg.tap_skin < 0 || g_cfg.tap_skin > 3) g_cfg.tap_skin = 0;
     g_cfg.hold_skin = ri(L"hold_skin", 0);
     if (g_cfg.hold_skin < 0 || g_cfg.hold_skin > 2) g_cfg.hold_skin = 0;
+    g_cfg.random_on = ri(L"random_on", 0) ? 1 : 0;
+    if (g_cfg.random_on) reshuffle_perm();
     g_anchor_vk = ri(L"anchor_vk", 0x4A);
     if (!is_anchor_key(g_anchor_vk)) g_anchor_vk = 0x4A;
     g_anchor_any = ri(L"anchor_any", 0) ? 1 : 0;
@@ -303,6 +317,7 @@ static void cfg_save() {
     wi(L"hold_tail", g_cfg.hold_tail);
     wi(L"tap_skin", g_cfg.tap_skin);
     wi(L"hold_skin", g_cfg.hold_skin);
+    wi(L"random_on", g_cfg.random_on);
     wi(L"auto_align", g_cfg.auto_align);
     wi(L"anchor_any", g_anchor_any);
     wi(L"hold_enabled", g_hold_enabled);
@@ -360,6 +375,7 @@ static void load_chart_at(const std::string& osz_utf8, int diff) {
               (int)g_chart.notes.size(), (int)(g_chart.first_note * 1000));
     set_msg(b);
     g_calib = false;
+    if (g_cfg.random_on) reshuffle_perm();
     std::vector<unsigned char> ogg;
     if (chart_read_ogg(w, ogg)) {
         aa_set_reference_ogg(std::move(ogg));
@@ -690,7 +706,10 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
     float centers[4];
     for (int i = 0; i < 4; i++)
         centers[i] = x0 + i * (lane_w + gap) + lane_w / 2 + lane_off;
-    auto lane_c = [&](int lane) { return centers[g_cfg.mirror ? 3 - lane : lane]; };
+    auto lane_c = [&](int lane) {
+        int col = g_cfg.random_on ? g_perm[lane] : lane;
+        return centers[g_cfg.mirror ? 3 - col : col];
+    };
 
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (g_cfg.visible) {
@@ -977,6 +996,22 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                 g_cfg.hold_tail = tt;
                 g_cfg_dirty = true;
             }
+        }
+        {
+            bool rv = g_cfg.random_on != 0;
+            if (ImGui::Checkbox("随机排列（列打乱）", &rv)) {
+                g_cfg.random_on = rv ? 1 : 0;
+                g_cfg_dirty = true;
+                if (rv) reshuffle_perm();
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!g_cfg.random_on);
+            if (ImGui::Button("重新随机"))
+                reshuffle_perm();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d→%d %d→%d %d→%d %d→%d", 0, g_perm[0], 1,
+                                g_perm[1], 2, g_perm[2], 3, g_perm[3]);
         }
         {
             const char* taps[] = {"圆球 ●", "圆环 ◯", "方块 ■", "菱形 ◆"};
