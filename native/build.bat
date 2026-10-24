@@ -8,12 +8,15 @@ if defined MINGW_BIN (
   set GCC=%MINGW_BIN%\gcc.exe
   set GXX=%MINGW_BIN%\g++.exe
 )
-"%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz.c -o m_miniz.o || exit /b 1
-"%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_tdef.c -o m_miniz_tdef.o || exit /b 1
-"%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_tinfl.c -o m_miniz_tinfl.o || exit /b 1
-"%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_zip.c -o m_miniz_zip.o || exit /b 1
+if not exist o_stb.o "%GXX%" -O2 -c stb_impl.cpp -o o_stb.o || exit /b 1
+if not exist o_align.o "%GXX%" -O2 -c audio_align.cpp -o o_align.o || exit /b 1
+if not exist m_miniz.o "%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz.c -o m_miniz.o || exit /b 1
+if not exist m_miniz_tdef.o "%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_tdef.c -o m_miniz_tdef.o || exit /b 1
+if not exist m_miniz_tinfl.o "%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_tinfl.c -o m_miniz_tinfl.o || exit /b 1
+if not exist m_miniz_zip.o "%GCC%" -O2 -DMINIZ_NO_STDIO -c miniz\miniz_zip.c -o m_miniz_zip.o || exit /b 1
 "%GXX%" -shared -O2 -static -static-libgcc -static-libstdc++ ^
   -o d3d11.dll dllmain.cpp overlay.cpp chart_loader.cpp ^
+  o_stb.o o_align.o ^
   m_miniz.o m_miniz_tdef.o m_miniz_tinfl.o m_miniz_zip.o ^
   imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\imgui_impl_dx11.cpp ^
   -lole32 -lgdi32 -luuid -lshell32 -ld3dcompiler -Wl,--enable-stdcall-fixup

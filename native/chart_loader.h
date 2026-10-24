@@ -31,3 +31,6 @@ bool chart_load(const std::wstring& osz_path, int idx, ChartData& out);
 
 // 读取整个文件（Windows 宽字符路径）
 bool read_file_w(const std::wstring& path, std::vector<unsigned char>& out);
+
+// 从 osz 里取出音频（第一个 .ogg），供自动对齐分析
+bool chart_read_ogg(const std::wstring& osz_path, std::vector<unsigned char>& out);

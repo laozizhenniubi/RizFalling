@@ -170,3 +170,29 @@ bool chart_load(const std::wstring& osz_path, int idx, ChartData& out) {
     if (out.diff.empty()) out.diff = diffs[idx].name;
     return !out.notes.empty();
 }
+
+bool chart_read_ogg(const std::wstring& osz_path, std::vector<unsigned char>& out) {
+    out.clear();
+    std::vector<unsigned char> buf;
+    if (!read_file_w(osz_path, buf)) return false;
+    mz_zip_archive zip;
+    memset(&zip, 0, sizeof(zip));
+    if (!mz_zip_reader_init_mem(&zip, buf.data(), buf.size(), 0)) return false;
+    mz_uint n = mz_zip_reader_get_num_files(&zip);
+    bool found = false;
+    for (mz_uint i = 0; i < n && !found; i++) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&zip, i, &st)) continue;
+        std::string name = st.m_filename ? st.m_filename : "";
+        if (!ends_with_ci(name, ".ogg")) continue;
+        size_t size = 0;
+        void* p = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);
+        if (p && size > 0) {
+            out.assign((unsigned char*)p, (unsigned char*)p + size);
+            found = true;
+        }
+        if (p) mz_free(p);
+    }
+    mz_zip_reader_end(&zip);
+    return found;
+}

@@ -11,3 +11,4 @@ native/m_*.o
 data/
 *.ini
 *.log
+*.wav

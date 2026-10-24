@@ -17,6 +17,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_dx11.h"
 #include "chart_loader.h"
+#include "audio_align.h"
 
 static void rflog(const char* msg);
 
@@ -92,6 +93,9 @@ struct RfCfg {
     int lane_vis = 1;
     int visible = 1;
     int offset_ms = 0;
+    int mirror = 0;
+    int hold_tail = 0;    // 0 尖尾 1 空缺 2 无
+    int auto_align = 0;
 };
 
 static RfCfg g_cfg;
@@ -129,6 +133,8 @@ static bool g_any_prev[256] = {0};
 static int g_key_list[64];
 static int g_key_list_n = 0;
 
+static bool g_calib = false;
+static std::vector<double> g_calib_diffs;
 static char g_msg[200] = {0};
 static double g_msg_t = 0.0;
 
@@ -245,6 +251,9 @@ static void cfg_load() {
     g_cfg.lane_vis = ri(L"lane_vis", 1);
     g_cfg.visible = ri(L"visible", 1);
     g_cfg.offset_ms = ri(L"offset_ms", 0);
+    g_cfg.mirror = ri(L"mirror", 0) ? 1 : 0;
+    g_cfg.hold_tail = ri(L"hold_tail", 0);
+    if (g_cfg.hold_tail < 0 || g_cfg.hold_tail > 2) g_cfg.hold_tail = 0;
     g_anchor_vk = ri(L"anchor_vk", 0x4A);
     if (!is_anchor_key(g_anchor_vk)) g_anchor_vk = 0x4A;
     g_anchor_any = ri(L"anchor_any", 0) ? 1 : 0;
@@ -284,6 +293,9 @@ static void cfg_save() {
     wi(L"visible", g_cfg.visible);
     wi(L"offset_ms", g_cfg.offset_ms);
     wi(L"anchor_vk", g_anchor_vk);
+    wi(L"mirror", g_cfg.mirror);
+    wi(L"hold_tail", g_cfg.hold_tail);
+    wi(L"auto_align", g_cfg.auto_align);
     wi(L"anchor_any", g_anchor_any);
     wi(L"hold_enabled", g_hold_enabled);
     wi(L"hold_vk", g_hold_vk);
@@ -339,6 +351,12 @@ static void load_chart_at(const std::string& osz_utf8, int diff) {
               osz_utf8.c_str(), diffs[diff].name.c_str(),
               (int)g_chart.notes.size(), (int)(g_chart.first_note * 1000));
     set_msg(b);
+    g_calib = false;
+    std::vector<unsigned char> ogg;
+    if (chart_read_ogg(w, ogg)) {
+        aa_set_reference_ogg(std::move(ogg));
+        aa_enable(g_cfg.auto_align != 0);
+    }
 }
 
 static void do_anchor_now() {
@@ -350,6 +368,7 @@ static void do_anchor_now() {
     g_stamp = GetTickCount64() / 1000.0;
     g_anchored = true;
     g_j_used = true;
+    if (g_cfg.auto_align) aa_manual_anchor(g_song_time, g_stamp);
     set_msg("已锚定：现在 = 首音");
 }
 
@@ -422,6 +441,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             g_dir_cs_init = true;
         }
         atexit(release_held_key);
+        atexit(aa_shutdown);
         g_imgui_inited = true;
         rflog("imgui: inited");
     }
@@ -505,6 +525,47 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
         }
     }
 
+    // 自动对齐：同步锚定/冻结状态
+    static AaInfo s_aa;
+    if (g_cfg.auto_align) {
+        aa_poll(s_aa);
+        if (s_aa.anchored) {
+            if (!g_anchored) g_j_used = true;
+            g_anchored = true;
+            g_song_time = s_aa.song_time;
+            g_stamp = s_aa.stamp;
+        }
+    }
+
+    // 对拍校准：任意普通键边沿 → 记录与最近音符的时差
+    if (g_calib && g_anchored && g_game_hwnd &&
+        GetForegroundWindow() == g_game_hwnd && !g_capture_key) {
+        for (int i = 0; i < g_key_list_n; i++) {
+            int vk = g_key_list[i];
+            bool k = (GetAsyncKeyState(vk) & 0x8000) != 0;
+            if (k && !g_any_prev[vk]) {
+                double d = g_song_time + (GetTickCount64() / 1000.0 - g_stamp) +
+                           g_cfg.offset_ms / 1000.0;
+                double best = 1e18;
+                for (const ChartNote& n : g_chart.notes) {
+                    double df = d - (double)n.t;
+                    if (df < 0) df = -df;
+                    if (df < best) best = df;
+                }
+                // 带符号：最近音符时间 = d ± best
+                double nearest = 0;
+                for (const ChartNote& n : g_chart.notes) {
+                    if (fabs((double)n.t - (d - best)) < 1e-6) { nearest = n.t; break; }
+                    if (fabs((double)n.t - (d + best)) < 1e-6) { nearest = n.t; break; }
+                }
+                g_calib_diffs.push_back(d - nearest);
+                if (g_calib_diffs.size() >= 24) g_calib = false;
+                break;
+            }
+            g_any_prev[vk] = k;
+        }
+    }
+
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(W, H);
     io.DeltaTime = 1.0f / 60.0f;
@@ -549,6 +610,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
     float centers[4];
     for (int i = 0; i < 4; i++)
         centers[i] = x0 + i * (lane_w + gap) + lane_w / 2 + lane_off;
+    auto lane_c = [&](int lane) { return centers[g_cfg.mirror ? 3 - lane : lane]; };
 
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (g_cfg.visible) {
@@ -576,7 +638,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             float r = ball_d / 2;
             for (const ChartNote& n : g_chart.notes) {
                 if (n.lane < 0 || n.lane > 3) continue;
-                float cx = centers[n.lane];
+                float cx = lane_c(n.lane);
                 if (n.end > 0) {
                     float lead = n.t - (float)disp;
                     float tlead = n.end - (float)disp;
@@ -592,13 +654,22 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                                           ImVec2(cx + hold_w / 2, bot),
                                           rgbs(g_cfg.hold_color,
                                                g_cfg.hold_a));
-                    if (yt > -ball_d && yt < H)
-                        dl->AddCircleFilled(
-                            ImVec2(cx, yt + ball_d * 0.21f), hold_w * 0.42f,
-                            rgbs(g_cfg.hold_color,
-                                 (g_cfg.hold_a + 0.12f > 1.0f)
-                                     ? 1.0f
-                                     : g_cfg.hold_a + 0.12f));
+                    if (yt > -ball_d && yt < H) {
+                        float ta = (g_cfg.hold_a + 0.12f > 1.0f)
+                                       ? 1.0f
+                                       : g_cfg.hold_a + 0.12f;
+                        if (g_cfg.hold_tail == 0)
+                            dl->AddCircleFilled(
+                                ImVec2(cx, yt + ball_d * 0.21f),
+                                hold_w * 0.42f,
+                                rgbs(g_cfg.hold_color, ta));
+                        else if (g_cfg.hold_tail == 1)
+                            dl->AddCircle(
+                                ImVec2(cx, yt + ball_d * 0.21f),
+                                hold_w * 0.42f,
+                                rgbs(g_cfg.hold_color, ta < 0.6f ? 0.6f : ta),
+                                0, 3.0f);
+                    }
                     float a = (yh < 40) ? yh / 40 : 1.0f;
                     dl->AddCircleFilled(ImVec2(cx, yh), r,
                                         rgbs(g_cfg.note_color,
@@ -692,6 +763,62 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             }
             ImGui::EndDisabled();
         }
+        {
+            bool av = g_cfg.auto_align != 0;
+            if (ImGui::Checkbox("自动对齐（音频匹配歌头）", &av)) {
+                g_cfg.auto_align = av ? 1 : 0;
+                g_cfg_dirty = true;
+                aa_enable(av);
+                if (av) g_anchored = false;   // 等自动锁定
+            }
+            if (g_cfg.auto_align && g_loaded) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("<- %s", s_aa.status);
+            }
+        }
+        {
+            char clab[96];
+            if (g_calib)
+                wsprintfA(clab, "结束校准（已 %d 拍）",
+                          (int)g_calib_diffs.size());
+            else
+                wsprintfA(clab, "对拍校准…");
+            if (ImGui::Button(clab)) {
+                if (!g_calib) {
+                    if (!g_anchored) {
+                        set_msg("先锚定再校准");
+                    } else {
+                        g_calib = true;
+                        g_calib_diffs.clear();
+                        set_msg("跟随音符节奏按任意键打拍（至少 6 下）");
+                    }
+                } else {
+                    g_calib = false;
+                    if (g_calib_diffs.size() >= 6) {
+                        std::vector<double> t = g_calib_diffs;
+                        std::sort(t.begin(), t.end());
+                        double m = t[t.size() / 2];
+                        double off = g_cfg.offset_ms - m * 1000.0;
+                        if (off > 500) off = 500;
+                        if (off < -500) off = -500;
+                        g_cfg.offset_ms = (int)off;
+                        g_cfg_dirty = true;
+                        char b[128];
+                        snprintf(b, sizeof(b), "校准完成：偏移 %d ms（中位 %.0f ms，%zu 拍）",
+                                 g_cfg.offset_ms, m * 1000.0, g_calib_diffs.size());
+                        set_msg(b);
+                    } else {
+                        set_msg("拍数不足，未调整");
+                    }
+                }
+            }
+            if (g_calib && !g_calib_diffs.empty()) {
+                ImGui::SameLine();
+                std::vector<double> t = g_calib_diffs;
+                std::sort(t.begin(), t.end());
+                ImGui::TextDisabled("中位 %+.0f ms", t[t.size() / 2] * 1000.0);
+            }
+        }
         if (g_msg[0] && now - g_msg_t < 6.0)
             ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", g_msg);
         ImGui::Separator();
@@ -767,6 +894,21 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             bool lv = g_cfg.lane_vis != 0;
             if (ImGui::Checkbox("显示轨道", &lv)) {
                 g_cfg.lane_vis = lv ? 1 : 0;
+                g_cfg_dirty = true;
+            }
+            ImGui::SameLine();
+            bool mv = g_cfg.mirror != 0;
+            if (ImGui::Checkbox("镜像（左手）", &mv)) {
+                g_cfg.mirror = mv ? 1 : 0;
+                g_cfg_dirty = true;
+            }
+        }
+        {
+            const char* tails[] = {"尖尾 ●", "空缺 ○", "无"};
+            int tt = g_cfg.hold_tail;
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::Combo("投皮尾形", &tt, tails, 3)) {
+                g_cfg.hold_tail = tt;
                 g_cfg_dirty = true;
             }
         }

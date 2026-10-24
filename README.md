@@ -17,9 +17,12 @@ Rizline 4K 实时读谱叠加层（Windows / d3d11 进程内注入）。
 - 两种锚定方式（每次载入谱面只生效一次）：
   - **任意普通键**：按任意字母/数字/符号键即锚定
   - **指定键**：默认 J，可自定义
+- **自动对齐（可选）**：内置 WASAPI loopback 采集 + OGG 解码 + onset/NCC 歌头匹配，
+  音乐响起约 1~2 秒自动锁定（实测误差约 20ms）；暂停冻结、原位恢复、重开一局自动识别
+- **对拍校准**：锚定后跟着音符打拍 6 下以上，自动取中位差修到「偏移 ms」
 - 可选：锚定成功后**模拟按住一个按键**（失焦/重载/关闭自动松开，防卡键）
 - 显示调节：流速、偏移、轨道宽度/水平偏移、判定线高度、球大小、谱面缩放、
-  轨道颜色/不透明度、全屏暗色
+  轨道颜色/不透明度、全屏暗色、**镜像（左手）**、**投皮尾形**（尖尾/空缺/无）
 - 所有调节自动保存到 INI，下次启动沿用
 
 ## 安装
@@ -56,6 +59,9 @@ Rizline 4K 实时读谱叠加层（Windows / d3d11 进程内注入）。
 | `scale` | 谱面缩放 %（50–200） |
 | `visible` / `lane_vis` | 叠加层 / 轨道显示 |
 | `anchor_any` | 1 = 任意普通键锚定，0 = 指定键 |
+| `auto_align` | 1 = 自动对齐（音频匹配），0 = 手动 |
+| `mirror` | 1 = 轨道镜像（左手） |
+| `hold_tail` | 投皮尾形：0 尖尾 / 1 空缺 / 2 无 |
 | `anchor_vk` | 指定锚定键的虚拟键码（默认 74 = J） |
 | `hold_enabled` / `hold_vk` | 锚定后模拟按住的键 |
 
@@ -87,6 +93,9 @@ native/
 ├─ dllmain.cpp       d3d11 代理导出转发 + DllMain 启动线程
 ├─ overlay.cpp       Present hook、ImGui 渲染、INS 菜单、INI、谱面加载
 ├─ chart_loader.cpp  .osz(zip) → .osu 解析（miniz）
+├─ audio_align.cpp   WASAPI loopback + stb_vorbis + onset/NCC 自动对齐
+├─ stb_impl.cpp      stb_vorbis 实现
+├─ stb/              stb_vorbis（public domain）
 ├─ imgui/            ImGui（MIT）
 ├─ miniz/            miniz zip/inflate（public domain / MIT）
 └─ build.bat
