@@ -96,6 +96,8 @@ struct RfCfg {
     int mirror = 0;
     int hold_tail = 0;    // 0 尖尾 1 空缺 2 无
     int auto_align = 0;
+    int tap_skin = 0;     // 0 圆球 1 圆环 2 方块 3 菱形
+    int hold_skin = 0;    // 0 实心条 1 描边条 2 管道
 };
 
 static RfCfg g_cfg;
@@ -254,6 +256,10 @@ static void cfg_load() {
     g_cfg.mirror = ri(L"mirror", 0) ? 1 : 0;
     g_cfg.hold_tail = ri(L"hold_tail", 0);
     if (g_cfg.hold_tail < 0 || g_cfg.hold_tail > 2) g_cfg.hold_tail = 0;
+    g_cfg.tap_skin = ri(L"tap_skin", 0);
+    if (g_cfg.tap_skin < 0 || g_cfg.tap_skin > 3) g_cfg.tap_skin = 0;
+    g_cfg.hold_skin = ri(L"hold_skin", 0);
+    if (g_cfg.hold_skin < 0 || g_cfg.hold_skin > 2) g_cfg.hold_skin = 0;
     g_anchor_vk = ri(L"anchor_vk", 0x4A);
     if (!is_anchor_key(g_anchor_vk)) g_anchor_vk = 0x4A;
     g_anchor_any = ri(L"anchor_any", 0) ? 1 : 0;
@@ -295,6 +301,8 @@ static void cfg_save() {
     wi(L"anchor_vk", g_anchor_vk);
     wi(L"mirror", g_cfg.mirror);
     wi(L"hold_tail", g_cfg.hold_tail);
+    wi(L"tap_skin", g_cfg.tap_skin);
+    wi(L"hold_skin", g_cfg.hold_skin);
     wi(L"auto_align", g_cfg.auto_align);
     wi(L"anchor_any", g_anchor_any);
     wi(L"hold_enabled", g_hold_enabled);
@@ -407,6 +415,78 @@ static ImU32 rgbs(int c, float a) {
 }
 
 // ---------------- 绘制 ----------------
+// 球皮：tap / hold 头共用（a 为 0..1 渐隐系数）
+static void draw_tap(ImDrawList* dl, float cx, float y, float r, float a,
+                     const RfCfg& c) {
+    ImU32 col = rgbs(c.note_color, c.note_a * a);
+    ImU32 hi = IM_COL32(255, 255, 255, (int)(120 * a));
+    switch (c.tap_skin) {
+    case 1: {   // 圆环
+        float th = r * 0.30f;
+        if (th < 2.5f) th = 2.5f;
+        dl->AddCircle(ImVec2(cx, y), r * 0.78f, col, 0, th);
+        dl->AddCircleFilled(ImVec2(cx, y), r * 0.22f, col);
+        break;
+    }
+    case 2: {   // 方块
+        float e = r * 0.82f;
+        dl->AddRectFilled(ImVec2(cx - e, y - e), ImVec2(cx + e, y + e), col,
+                          r * 0.18f);
+        dl->AddRectFilled(ImVec2(cx - e * 0.55f, y - e * 0.55f),
+                          ImVec2(cx - e * 0.1f, y - e * 0.1f), hi);
+        break;
+    }
+    case 3: {   // 菱形
+        dl->AddQuadFilled(ImVec2(cx, y - r * 0.95f),
+                          ImVec2(cx + r * 0.85f, y),
+                          ImVec2(cx, y + r * 0.95f),
+                          ImVec2(cx - r * 0.85f, y), col);
+        dl->AddCircleFilled(ImVec2(cx, y), r * 0.20f, hi);
+        break;
+    }
+    default: {  // 圆球
+        dl->AddCircleFilled(ImVec2(cx, y), r, col);
+        dl->AddCircleFilled(ImVec2(cx - r * 0.28f, y - r * 0.28f), r * 0.32f,
+                            hi);
+        break;
+    }
+    }
+}
+
+// 砖皮：hold 主体
+static void draw_hold_body(ImDrawList* dl, float cx, float top, float bot,
+                           float hold_w, const RfCfg& c) {
+    if (bot <= top) return;
+    ImU32 hcol = rgbs(c.hold_color, c.hold_a);
+    switch (c.hold_skin) {
+    case 1: {   // 描边条
+        ImU32 body = rgbs(c.hold_color, c.hold_a * 0.45f);
+        dl->AddRectFilled(ImVec2(cx - hold_w / 2, top),
+                          ImVec2(cx + hold_w / 2, bot), body);
+        ImU32 line = rgbs(c.hold_color,
+                          (c.hold_a + 0.35f > 1.0f) ? 1.0f : c.hold_a + 0.35f);
+        dl->AddRect(ImVec2(cx - hold_w / 2, top),
+                    ImVec2(cx + hold_w / 2, bot), line, 0, 0, 2.0f);
+        break;
+    }
+    case 2: {   // 管道
+        float rail = hold_w * 0.22f;
+        ImU32 mid = rgbs(c.hold_color, c.hold_a * 0.5f);
+        dl->AddRectFilled(ImVec2(cx - hold_w / 2 + rail, top),
+                          ImVec2(cx + hold_w / 2 - rail, bot), mid);
+        dl->AddRectFilled(ImVec2(cx - hold_w / 2, top),
+                          ImVec2(cx - hold_w / 2 + rail, bot), hcol);
+        dl->AddRectFilled(ImVec2(cx + hold_w / 2 - rail, top),
+                          ImVec2(cx + hold_w / 2, bot), hcol);
+        break;
+    }
+    default: {  // 实心条
+        dl->AddRectFilled(ImVec2(cx - hold_w / 2, top),
+                          ImVec2(cx + hold_w / 2, bot), hcol);
+        break;
+    }
+    }
+}
 static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                          ID3D11Texture2D* bb, HWND outHwnd) {
     static int dbg_frame = 0;
@@ -649,11 +729,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                     if (yh > judge_y) yh = judge_y;
                     if (yh < -ball_d) continue;
                     float top = yt + ball_d * 0.42f, bot = yh;
-                    if (bot > top)
-                        dl->AddRectFilled(ImVec2(cx - hold_w / 2, top),
-                                          ImVec2(cx + hold_w / 2, bot),
-                                          rgbs(g_cfg.hold_color,
-                                               g_cfg.hold_a));
+                    draw_hold_body(dl, cx, top, bot, hold_w, g_cfg);
                     if (yt > -ball_d && yt < H) {
                         float ta = (g_cfg.hold_a + 0.12f > 1.0f)
                                        ? 1.0f
@@ -671,12 +747,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                                 0, 3.0f);
                     }
                     float a = (yh < 40) ? yh / 40 : 1.0f;
-                    dl->AddCircleFilled(ImVec2(cx, yh), r,
-                                        rgbs(g_cfg.note_color,
-                                             g_cfg.note_a * a));
-                    dl->AddCircleFilled(
-                        ImVec2(cx - r * 0.28f, yh - r * 0.28f), r * 0.32f,
-                        IM_COL32(255, 255, 255, (int)(120 * a)));
+                    draw_tap(dl, cx, yh, r, a, g_cfg);
                 } else {
                     float lead = n.t - (float)disp;
                     float y = judge_y - lead * speed;
@@ -685,12 +756,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                     if (y < 40) a = y / 40;
                     if (y > judge_y) a *= 1.0f - (y - judge_y) / 90.0f;
                     if (a <= 0.02f) continue;
-                    dl->AddCircleFilled(ImVec2(cx, y), r,
-                                        rgbs(g_cfg.note_color,
-                                             g_cfg.note_a * a));
-                    dl->AddCircleFilled(
-                        ImVec2(cx - r * 0.28f, y - r * 0.28f), r * 0.32f,
-                        IM_COL32(255, 255, 255, (int)(120 * a)));
+                    draw_tap(dl, cx, y, r, a, g_cfg);
                 }
             }
         }
@@ -909,6 +975,23 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             ImGui::SetNextItemWidth(160);
             if (ImGui::Combo("投皮尾形", &tt, tails, 3)) {
                 g_cfg.hold_tail = tt;
+                g_cfg_dirty = true;
+            }
+        }
+        {
+            const char* taps[] = {"圆球 ●", "圆环 ◯", "方块 ■", "菱形 ◆"};
+            int ts = g_cfg.tap_skin;
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::Combo("球皮", &ts, taps, 4)) {
+                g_cfg.tap_skin = ts;
+                g_cfg_dirty = true;
+            }
+            ImGui::SameLine();
+            const char* holds[] = {"实心条", "描边条", "管道"};
+            int hs = g_cfg.hold_skin;
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::Combo("砖皮", &hs, holds, 3)) {
+                g_cfg.hold_skin = hs;
                 g_cfg_dirty = true;
             }
         }
