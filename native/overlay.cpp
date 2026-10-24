@@ -983,7 +983,7 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
             }
             ImGui::SameLine();
             bool mv = g_cfg.mirror != 0;
-            if (ImGui::Checkbox("镜像（左手）", &mv)) {
+            if (ImGui::Checkbox("谱面镜像（左手）", &mv)) {
                 g_cfg.mirror = mv ? 1 : 0;
                 g_cfg_dirty = true;
             }
