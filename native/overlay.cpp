@@ -99,6 +99,11 @@ struct RfCfg {
     int tap_skin = 0;     // 0 圆球 1 圆环 2 方块 3 菱形
     int hold_skin = 0;    // 0 实心条 1 描边条 2 管道
     int random_on = 0;    // 随机排列（列打乱）
+    int hide_top_on = 0;  // 上隐（顶部遮挡）
+    int hide_top_pct = 40;
+    int hide_bot_on = 0;  // 下隐（底部遮挡）
+    int hide_bot_pct = 82;
+    int hide_alpha = 235;
 };
 
 static RfCfg g_cfg;
@@ -273,6 +278,11 @@ static void cfg_load() {
     g_cfg.hold_skin = ri(L"hold_skin", 0);
     if (g_cfg.hold_skin < 0 || g_cfg.hold_skin > 2) g_cfg.hold_skin = 0;
     g_cfg.random_on = ri(L"random_on", 0) ? 1 : 0;
+    g_cfg.hide_top_on = ri(L"hide_top_on", 0) ? 1 : 0;
+    g_cfg.hide_top_pct = ri(L"hide_top_pct", 40);
+    g_cfg.hide_bot_on = ri(L"hide_bot_on", 0) ? 1 : 0;
+    g_cfg.hide_bot_pct = ri(L"hide_bot_pct", 82);
+    g_cfg.hide_alpha = ri(L"hide_alpha", 235);
     if (g_cfg.random_on) reshuffle_perm();
     g_anchor_vk = ri(L"anchor_vk", 0x4A);
     if (!is_anchor_key(g_anchor_vk)) g_anchor_vk = 0x4A;
@@ -318,6 +328,11 @@ static void cfg_save() {
     wi(L"tap_skin", g_cfg.tap_skin);
     wi(L"hold_skin", g_cfg.hold_skin);
     wi(L"random_on", g_cfg.random_on);
+    wi(L"hide_top_on", g_cfg.hide_top_on);
+    wi(L"hide_top_pct", g_cfg.hide_top_pct);
+    wi(L"hide_bot_on", g_cfg.hide_bot_on);
+    wi(L"hide_bot_pct", g_cfg.hide_bot_pct);
+    wi(L"hide_alpha", g_cfg.hide_alpha);
     wi(L"auto_align", g_cfg.auto_align);
     wi(L"anchor_any", g_anchor_any);
     wi(L"hold_enabled", g_hold_enabled);
@@ -779,6 +794,26 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
                 }
             }
         }
+        // 上隐 / 下隐：音符层之上的渐变遮罩
+        {
+            float sx1 = x0 - 10, sx2 = x0 + total + 10;
+            ImU32 A = IM_COL32(0, 0, 0, g_cfg.hide_alpha);
+            ImU32 T = IM_COL32(0, 0, 0, 0);
+            if (g_cfg.hide_top_on) {
+                float yb = judge_y * (g_cfg.hide_top_pct / 100.0f);
+                if (yb < 4) yb = 4;
+                dl->AddRectFilledMultiColor(ImVec2(sx1, 0), ImVec2(sx2, yb),
+                                            A, A, T, T);
+            }
+            if (g_cfg.hide_bot_on) {
+                float ys = judge_y * (g_cfg.hide_bot_pct / 100.0f);
+                if (ys > judge_y - 4) ys = judge_y - 4;
+                if (ys < 4) ys = 4;
+                dl->AddRectFilledMultiColor(ImVec2(sx1, ys),
+                                            ImVec2(sx2, judge_y),
+                                            T, T, A, A);
+            }
+        }
     }
 
     // ===== INS 菜单 =====
@@ -1057,6 +1092,25 @@ static void draw_overlay(ID3D11Device* dev, ID3D11DeviceContext* ctx,
         if (ImGui::SliderInt("暗色强度", &da, 0, 220)) {
             g_cfg.dark_a = da / 255.0f;
             g_cfg_dirty = true;
+        }
+        {
+            bool ht = g_cfg.hide_top_on != 0;
+            if (ImGui::Checkbox("上隐（顶部遮挡）", &ht)) {
+                g_cfg.hide_top_on = ht ? 1 : 0;
+                g_cfg_dirty = true;
+            }
+            ImGui::SameLine();
+            bool hb = g_cfg.hide_bot_on != 0;
+            if (ImGui::Checkbox("下隐（底部遮挡）", &hb)) {
+                g_cfg.hide_bot_on = hb ? 1 : 0;
+                g_cfg_dirty = true;
+            }
+            if (ImGui::SliderInt("上隐高度 %", &g_cfg.hide_top_pct, 0, 90))
+                g_cfg_dirty = true;
+            if (ImGui::SliderInt("下隐位置 %", &g_cfg.hide_bot_pct, 5, 98))
+                g_cfg_dirty = true;
+            if (ImGui::SliderInt("遮罩浓度", &g_cfg.hide_alpha, 60, 255))
+                g_cfg_dirty = true;
         }
         ImGui::Separator();
         ImGui::Text("音符: %d    %.0f FPS", (int)g_chart.notes.size(),
